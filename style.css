@@ -874,10 +874,13 @@ input:checked + .slider:before {
     margin-bottom: 0;
 }
 .message .timestamp {
-    font-size: 0.75em;
-    color: #999;
-    margin-top: 5px;
+    font-size: 0.68em;
+    color: #8f8f8f;
+    margin-bottom: 4px;
     display: block;
+    text-align: left;
+    align-self: flex-start;
+    line-height: 1.2;
 }
 .message.received {
     background-color: #f0f0f0;
@@ -1383,6 +1386,7 @@ body.assignment-view-only #internalNotesContainer {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 10px;
     cursor: pointer;
     list-style: none;
 }
@@ -1390,9 +1394,11 @@ body.assignment-view-only #internalNotesContainer {
 .order-summary-left {
     display: flex;
     align-items: center;
+    flex-wrap: nowrap;
     gap: 8px;
     flex: 1 1 auto;
     min-width: 0;
+    padding-right: 14px;
 }
 
 .order-summary-left .time-ago {
@@ -1403,6 +1409,7 @@ body.assignment-view-only #internalNotesContainer {
 
 .order-chevron-text {
     display: inline-block;
+    flex: 0 0 12px;
     width: 12px;
     height: 12px;
     border-right: 3px solid #9a9a9a;
@@ -1410,6 +1417,7 @@ body.assignment-view-only #internalNotesContainer {
     transform: rotate(45deg);
     transform-origin: center;
     margin-right: 2px;
+    margin-left: 2px;
     margin-top: -2px;
     transition: transform 0.2s ease;
 }
@@ -1841,4 +1849,10 @@ mark {
 .message.center-system-note,
 .message.center-system-note .message-content {
     background-color: transparent !important;
+}
+
+.message.sent.system-message.center-system-note {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
 }

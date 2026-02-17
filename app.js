@@ -414,7 +414,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const type = String(messageType || '').trim().toLowerCase();
         if (type === 'subscriber' || type === 'customer' || type === 'user') return 'customer';
         if (type === 'agent') return 'agent';
-        if (type === 'system') return 'system';
+        if (type === 'system' || type === 'template' || type === 'escalation') return 'system';
         return '';
     }
 
@@ -422,9 +422,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!Array.isArray(media)) return [];
         return media
             .map(item => {
-                if (typeof item === 'string') return item.trim();
-                if (item && typeof item === 'object' && typeof item.url === 'string') return item.url.trim();
-                return '';
+                if (typeof item === 'string') {
+                    const url = item.trim();
+                    return url ? { url, type: '' } : null;
+                }
+                if (!item || typeof item !== 'object') return null;
+                const rawUrl = (
+                    item.url ||
+                    item.media_url ||
+                    item.src ||
+                    item.link ||
+                    ''
+                );
+                const url = String(rawUrl || '').trim();
+                if (!url) return null;
+                const type = String(
+                    item.type ||
+                    item.media_type ||
+                    item.mime_type ||
+                    item.mimeType ||
+                    item.content_type ||
+                    ''
+                ).trim().toLowerCase();
+                return { url, type };
             })
             .filter(Boolean);
     }
@@ -432,18 +452,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     function normalizeConversationMessage(message) {
         if (!message || typeof message !== 'object') return null;
 
+        const messageType = String(message.message_type || message.messageType || '').trim().toLowerCase();
         const explicitRole = String(message.role || '').trim().toLowerCase();
-        const mappedRole = mapMessageTypeToRole(message.message_type);
+        const mappedRole = mapMessageTypeToRole(messageType);
         const role = explicitRole || mappedRole;
         if (!role) return null;
 
         const contentRaw = message.content != null ? message.content : message.message_text;
         const content = typeof contentRaw === 'string' ? contentRaw : (contentRaw == null ? '' : String(contentRaw));
-        if (!content.trim()) return null;
+        const isEventSystemMessage = messageType === 'template' || messageType === 'escalation';
+        if (!content.trim() && !isEventSystemMessage) return null;
 
         const normalized = { role, content };
+        if (messageType) normalized.messageType = messageType;
         const media = normalizeMessageMedia(message.media || message.message_media);
         if (media.length) normalized.media = media;
+
+        const dateTimeRaw = (
+            message.dateTime != null ? message.dateTime :
+            (message.date_time != null ? message.date_time : message.timestamp)
+        );
+        const dateTime = typeof dateTimeRaw === 'string'
+            ? dateTimeRaw.trim()
+            : (dateTimeRaw == null ? '' : String(dateTimeRaw).trim());
+        if (dateTime) normalized.dateTime = dateTime;
 
         const id = String(message.id || message.message_id || '').trim();
         if (id) normalized.id = id;
@@ -797,13 +829,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const appendMedia = (container, mediaList) => {
             if (!Array.isArray(mediaList) || mediaList.length === 0) return;
+
+            const cleanMediaUrl = (url) => String(url || '')
+                .trim()
+                .split(';')[0]
+                .split('?')[0]
+                .split('#')[0]
+                .toLowerCase();
+
+            const isImageMedia = (url, mediaType) => {
+                if (String(mediaType || '').toLowerCase().startsWith('image/')) return true;
+                if (/^data:image\//i.test(String(url || '').trim())) return true;
+                return /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif)$/.test(cleanMediaUrl(url));
+            };
+
             const mediaWrap = document.createElement('div');
             mediaWrap.className = 'message-media-list';
-            mediaList.forEach(mediaUrl => {
-                const url = String(mediaUrl || '').trim();
+            mediaList.forEach(mediaItem => {
+                const isObject = mediaItem && typeof mediaItem === 'object';
+                const url = String(isObject ? mediaItem.url : mediaItem).trim();
+                const mediaType = isObject ? String(mediaItem.type || '').trim().toLowerCase() : '';
                 if (!url) return;
-                const lower = url.toLowerCase();
-                const isImage = /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/.test(lower);
+                const isImage = isImageMedia(url, mediaType);
                 if (isImage) {
                     const img = document.createElement('img');
                     img.src = url;
@@ -830,6 +877,41 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         };
 
+        const appendDateTime = (container, dateTimeValue, prepend = false) => {
+            const raw = String(dateTimeValue || '').trim();
+            if (!raw) return;
+            const value = formatDateTimeValue(raw);
+            const stamp = document.createElement('span');
+            stamp.className = 'timestamp';
+            stamp.textContent = value;
+            if (prepend && container.firstChild) {
+                container.insertBefore(stamp, container.firstChild);
+                return;
+            }
+            container.appendChild(stamp);
+        };
+
+        const formatDateTimeValue = (raw) => {
+            const parseDateTime = (value) => {
+                const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+                const parsed = new Date(normalized);
+                if (!Number.isNaN(parsed.getTime())) return parsed;
+                return null;
+            };
+            const parsed = parseDateTime(raw);
+            const value = parsed
+                ? new Intl.DateTimeFormat('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    hour12: true
+                }).format(parsed)
+                : raw;
+            return value;
+        };
+
         if (!Array.isArray(conversation) || conversation.length === 0) {
             const fallbackMessage = document.createElement('div');
             fallbackMessage.className = 'message received';
@@ -843,28 +925,69 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         conversation.forEach((message, index) => {
-            if (!message || !message.content) return;
+            if (!message) return;
             if (message.role === 'system') {
-                const systemText = String(message.content || '').trim();
-                const isCenteredSystemNote = /^(template used:|escalation notes?:)/i.test(systemText);
+                const rawSystemText = String(message.content || '').trim();
+                const systemType = String(message.messageType || '').trim().toLowerCase();
+                const isTemplateEvent = systemType === 'template';
+                const isEscalationEvent = systemType === 'escalation';
+                const isCenteredSystemNote = isTemplateEvent || isEscalationEvent || /^(template used:|escalation notes?:)/i.test(rawSystemText);
+
+                let displayText = rawSystemText;
+                if (isTemplateEvent) {
+                    if (!rawSystemText) {
+                        displayText = 'Template used: "Unknown template";';
+                    } else if (/^template used:/i.test(rawSystemText)) {
+                        displayText = rawSystemText;
+                    } else {
+                        displayText = `Template used: "${rawSystemText}";`;
+                    }
+                } else if (isEscalationEvent) {
+                    const escalationText = rawSystemText.replace(/^conversation escalated:\s*/i, '').trim();
+                    displayText = escalationText
+                        ? `Conversation escalated: "${escalationText}"`
+                        : 'Conversation escalated:';
+                }
+
+                if (!displayText) return;
                 const systemMessage = document.createElement('div');
                 systemMessage.className = `message sent system-message${isCenteredSystemNote ? ' center-system-note' : ''}`;
-                systemMessage.innerHTML = `
-                    <div class="message-content">
-                        <p>${message.content}</p>
-                    </div>
-                `;
-                appendMedia(systemMessage.querySelector('.message-content'), message.media);
+                const contentEl = document.createElement('div');
+                contentEl.className = 'message-content';
+                const p = document.createElement('p');
+                if (isTemplateEvent) {
+                    const tail = displayText.replace(/^template used/i, '').trimStart();
+                    const prefix = document.createElement('strong');
+                    prefix.textContent = 'Template used';
+                    p.appendChild(prefix);
+                    p.append(document.createTextNode(tail ? ` ${tail}` : ''));
+                } else if (isEscalationEvent) {
+                    const tail = displayText.replace(/^conversation escalated/i, '').trimStart();
+                    const prefix = document.createElement('strong');
+                    prefix.textContent = 'Conversation escalated';
+                    p.appendChild(prefix);
+                    p.append(document.createTextNode(tail ? ` ${tail}` : ''));
+                } else {
+                    p.textContent = displayText;
+                }
+                contentEl.appendChild(p);
+                systemMessage.appendChild(contentEl);
+                if (!isCenteredSystemNote) {
+                    appendDateTime(contentEl, message.dateTime, true);
+                    appendMedia(contentEl, message.media);
+                }
                 chatMessages.appendChild(systemMessage);
                 return;
             }
 
+            if (!message.content) return;
             const isAgent = message.role === 'agent';
             const wrapper = document.createElement('div');
             wrapper.className = `message ${isAgent ? 'sent' : 'received'}`;
 
             const content = document.createElement('div');
             content.className = 'message-content';
+            appendDateTime(content, message.dateTime);
             const p = document.createElement('p');
             p.textContent = message.content;
             content.appendChild(p);
